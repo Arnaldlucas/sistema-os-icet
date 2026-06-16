@@ -1,0 +1,31 @@
+services:
+  # 🐳 MOTOR DO BACK-END (FastAPI + SQLite Assíncrono)
+  backend:
+    build:
+      context: ./os-backend
+      dockerfile: Dockerfile
+    container_name: os_backend_container
+    ports:
+      - "8000:8000"
+    volumes:
+      # Garante a persistência do banco SQLite na máquina do servidor
+      - ./os-backend:/app/data
+    environment:
+      - DATABASE_URL=sqlite+aiosqlite:///app/data/os_icet.sqlite3
+    restart: always
+
+  # 🐳 MOTOR DO FRONT-END (Vite + React servido via Nginx)
+  frontend:
+    build:
+      context: ./os-frontend
+      dockerfile: Dockerfile
+    container_name: os_frontend_container
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: always
+
+networks:
+  default:
+    name: os_icet_network

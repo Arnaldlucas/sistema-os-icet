@@ -1,20 +1,25 @@
-# Usa uma imagem oficial leve do Python
+# Imagem base leve oficial do Python
 FROM python:3.11-slim
 
-# Define o diretório de trabalho dentro do container
+# Evita que o Python grave arquivos .pyc e garante logs em tempo real
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
 WORKDIR /app
 
-# Copia os arquivos de dependências
+# Instala ferramentas essenciais de compilação
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copia os requisitos e instala dependências no escopo global do container
 COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade -r requirements.txt
 
-# Instala as dependências de forma limpa
-RUN pip install --no-cache-dir -r requirements.txt
+# Copia a pasta da aplicação FastAPI
+COPY ./app ./app
 
-# Copia todo o código do backend para dentro do container
-COPY . .
-
-# Expõe a porta que o FastAPI escuta
 EXPOSE 8000
 
-# Comando para rodar o Uvicorn apontando para a porta 8000 dentro do container
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Executa o servidor assíncrono mapeando o host correto para o Docker
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
