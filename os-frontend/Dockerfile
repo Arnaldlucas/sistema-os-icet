@@ -1,19 +1,13 @@
-# Estágio 1: Build do painel React
-FROM node:20-alpine AS build
+FROM node:18-alpine
 
 WORKDIR /app
 
-COPY package*.json ./
+COPY package*.json /app/
+
 RUN npm install
 
-COPY . .
-RUN npm run build
+COPY . /app/
 
-# Estágio 2: Distribuição veloz via Nginx
-FROM nginx:1.25-alpine
+EXPOSE 3000
 
-COPY --from=build /app/dist /usr/share/nginx/html
-
-EXPOSE 80
-
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["npm", "run", "dev"]

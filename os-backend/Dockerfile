@@ -1,25 +1,25 @@
-# Imagem base leve oficial do Python
 FROM python:3.11-slim
-
-# Evita que o Python grave arquivos .pyc e garante logs em tempo real
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-# Instala ferramentas essenciais de compilação
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# Instala dependências de compilação essenciais para o Postgres e bibliotecas C
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    libpq-dev \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Copia os requisitos e instala dependências no escopo global do container
-COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade -r requirements.txt
+COPY requirements.txt /app/
 
-# Copia a pasta da aplicação FastAPI
-COPY ./app ./app
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt
+
+COPY . /app/
 
 EXPOSE 8000
 
-# Executa o servidor assíncrono mapeando o host correto para o Docker
+# Execução do Uvicorn chamando a instância do FastAPI contida no main.py
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -1,5 +1,8 @@
 import React from 'react';
 
+/**
+ * COMPONENTE: TextArea (Bloco de Texto Amplo)
+ */
 export function TextArea({ label, value = "", onChange, rows = "4", placeholder = "" }) {
   const id = label.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\W+/g, "-");
 
