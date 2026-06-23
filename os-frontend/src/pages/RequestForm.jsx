@@ -1,183 +1,243 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { Input } from '../components/Input';
-import { Select } from '../components/Select';
 import { TextArea } from '../components/TextArea';
 
-const emptyRequest = {
-  nome: "",
-  siape: "",
-  email: "",
-  perfil: "Docente",
-  bloco: "",
-  sala: "",
-  categoria: "Manutenção de Hardware",
-  descricao: ""
-};
+const CATEGORIAS_GTI = [
+  "REDE E CONECTIVIDADE",
+  "HARDWARE E EQUIPAMENTOS",
+  "SISTEMAS E SOFTWARE",
+  "AUDIOVISUAL",
+  "SEGURANÇA DA INFORMAÇÃO / ACESSO",
+  "OUTROS / SOLICITAÇÃO GERAL"
+];
 
-export function RequestForm({ onCreateRequest }) {
+/**
+ * @component RequestForm
+ * @description Formulário wizard para abertura de ordens de serviço com interface de alta fidelidade.
+ */
+export function RequestForm({ onRefreshRequests, onNavigate }) {
   const { user, request } = useAuth();
-  const [form, setForm] = useState(emptyRequest);
-  const [demands, setDemands] = useState([]);
+  const [wizardStep, setWizardStep] = useState(1);
+
+  const [setor, setSetor] = useState('');
+  const [localExato, setLocalExato] = useState('');
+  const [categoria, setCategoria] = useState('REDE E CONECTIVIDADE');
+  const [descricao, setDescricao] = useState('');
+
   const [submitting, setSubmitting] = useState(false);
+  const [errorBanner, setErrorBanner] = useState('');
 
-  // Regra de negócio: Se o usuário logado não for admin, ele tem perfil limitado (campos travados)
-  const isLimitedUser = user && user.grupo_nome !== "Administradores";
-
-  // Carrega as categorias de demandas públicas em tempo real da API FastAPI
-  useEffect(() => {
-    async function fetchPublicDemands() {
-      try {
-        const endpoint = user ? '/api/admin/bootstrap' : '/api/public/bootstrap';
-        const data = await request(endpoint);
-        setDemands(data.demands || []);
-      } catch (error) {
-        console.error("Falha ao carregar as demandas do catálogo:", error);
-      }
+  const obtenerPrazoEstimado = (cat) => {
+    if (cat.includes("REDE") || cat.includes("SEGURANÇA")) {
+      return { prazo: "Até 24h úteis (SLA Crítico)", cor: "#10b981", bg: "bg-success-subtle" };
     }
-    fetchPublicDemands();
-  }, [user, request]);
-
-  const updateField = (field, value) => {
-    setForm((current) => ({ ...current, [field]: value }));
+    if (cat.includes("HARDWARE") || cat.includes("AUDIOVISUAL")) {
+      return { prazo: "Até 48h úteis (Manutenção Física)", cor: "#0284c7", bg: "bg-primary-subtle" };
+    }
+    return { prazo: "Até 72h úteis (Análise de Escopo)", cor: "#f59e0b", bg: "bg-warning-subtle" };
   };
 
-  // Heurística 5: Validação proativa. O botão de envio permanece travado se houver campos vazios
-  const isFormInvalid = useMemo(() => {
-    const nomeValid = isLimitedUser ? true : form.nome.trim().length > 0;
-    const emailValid = isLimitedUser ? true : form.email.trim().length > 0;
-    
-    return (
-      !nomeValid ||
-      !emailValid ||
-      form.siape.trim().length === 0 ||
-      form.bloco.trim().length === 0 ||
-      form.sala.trim().length === 0 ||
-      form.descricao.trim().length === 0
-    );
-  }, [form, isLimitedUser]);
+  const infoPrazo = obtenerPrazoEstimado(categoria);
+  const isFormInvalid = !setor.trim() || !localExato.trim() || descricao.trim().length < 10 || submitting;
 
-  const handleSubmit = async (event) => {
-    event.preventDefault();
-    if (isFormInvalid || submitting) return;
-
+  const handleFinalSubmit = async () => {
     setSubmitting(true);
+    setErrorBanner('');
 
-    // Força a higienização dos dados removendo espaços extras (Trim) antes de bater na API
-    const sanitizedPayload = {
-      nome: isLimitedUser ? user.nome : form.nome.trim(),
-      email: isLimitedUser ? user.email : form.email.trim(),
-      perfil: isLimitedUser ? user.grupo_nome : form.perfil,
-      siape: form.siape.trim(),
-      bloco: form.bloco.trim(),
-      sala: form.sala.trim(),
-      categoria: form.categoria,
-      descricao: form.descricao.trim()
+    const payloadValido = {
+      categoria: categoria,
+      subcategoria: "Geral / Chamado Direto", 
+      prioridade: "MEDIA", 
+      tipo_ambiente: 'UNIVERSAL', 
+      bloco: setor.trim(),
+      sala_ou_espaco: localExato.trim(),
+      numero_patrimonio: null, 
+      descricao: descricao.trim(),
+      titulo: `[${categoria}] ${setor.trim()} - ${localExato.trim()}`
     };
 
-    const success = await onCreateRequest(sanitizedPayload);
-    if (success) {
-      setForm(emptyRequest); // Heurística 3: Reseta o estado limpando o formulário após gravação
+    try {
+      const response = await request('/api/requests', {
+        method: 'POST',
+        body: JSON.stringify(payloadValido)
+      });
+
+      if (response && response.success === false) throw new Error(response.message);
+      
+      if (onRefreshRequests) await onRefreshRequests();
+      if (onNavigate) onNavigate("consultas");
+    } catch (err) {
+      setErrorBanner(err.message || "Falha na comunicação com o servidor.");
+      setWizardStep(1);
+    } finally {
+      setSubmitting(false);
     }
-    setSubmitting(false);
   };
 
   return (
-    <section className="surface animate__animated animate__fadeIn">
-      <div className="row g-4">
-        {/* Painel Informativo Lateral */}
-        <div className="col-lg-4 border-end pe-lg-4">
-          <h2 className="h4 fw-bold mb-3" style={{ color: "var(--icet-dark)" }}>Abertura de Chamado</h2>
-          <p className="text-muted small">
-            Utilize este canal para registrar incidentes ou solicitações de suporte em infraestrutura de rede, hardware ou sistemas no campus ICET.
-          </p>
-          <div className="alert alert-info small border-0 shadow-sm mt-3" style={{ backgroundColor: "rgba(5, 150, 105, 0.05)", color: "var(--icet-dark)" }}>
-            <strong>Nota de Atendimento:</strong> Certifique-se de preencher a localização exata do bloco e da sala para agilizar a alocação do técnico responsável.
-          </div>
-          <button 
-            className="btn btn-sm btn-outline-secondary w-100 mt-2"
-            type="button"
-            onClick={() => setForm(emptyRequest)}
-            disabled={submitting}
-          >
-            Limpar Todos os Campos
-          </button>
-        </div>
+    <div className="w-100 container-fluid p-0 animate__animated animate__fadeIn">
+      <style>{`
+        .stepper-line { height: 2px; background: #e2e8f0; position: relative; top: 12px; z-index: 0; }
+        .step-dot { width: 24px; height: 24px; border-radius: 50%; background: #fff; border: 2px solid #e2e8f0; z-index: 1; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: bold; color: #94a3b8; transition: all 0.3s; }
+        .step-dot.active { border-color: #0284c7; color: #0284c7; box-shadow: 0 0 0 4px rgba(2, 132, 199, 0.1); }
+        .step-dot.completed { background: #0284c7; border-color: #0284c7; color: #fff; }
+        .section-title { color: #1F2937; font-weight: 600; font-size: 1.1rem; margin-bottom: 1.5rem; display: flex; align-items: center; }
+        .form-helper-text { font-size: 11px; color: #64748b; margin-top: 4px; display: block; font-family: monospace; }
+        .char-counter { font-size: 10px; padding: 2px 6px; border-radius: 4px; background: #f8fafc; color: #64748b; border: 1px solid #e2e8f0; }
+      `}</style>
 
-        {/* Formulário Interativo */}
-        <div className="col-lg-8">
-          <form className="row g-3" onSubmit={handleSubmit}>
-            <Input 
-              label="Nome do Solicitante" 
-              value={isLimitedUser ? user.nome : form.nome} 
-              onChange={(v) => updateField("nome", v)} 
-              disabled={isLimitedUser}
-              placeholder="Digite seu nome completo"
-            />
-            <Input 
-              label="Matrícula SIAPE" 
-              value={form.siape} 
-              onChange={(v) => updateField("siape", v)} 
-              col="col-sm-6"
-              placeholder="Ex: 1234567"
-            />
-            <Input 
-              label="E-mail Institucional" 
-              type="email"
-              value={isLimitedUser ? user.email : form.email} 
-              onChange={(v) => updateField("email", v)} 
-              col="col-sm-6"
-              disabled={isLimitedUser}
-              placeholder="usuario@ufam.edu.br"
-            />
-            <Select 
-              label="Vínculo Institucional" 
-              value={isLimitedUser ? user.grupo_nome : form.perfil} 
-              onChange={(v) => updateField("perfil", v)} 
-              options={["Docente", "Técnico Administrativo em Educação"]} 
-              col="col-sm-6"
-              disabled={isLimitedUser}
-            />
-            <Select 
-              label="Categoria do Incidente" 
-              value={form.categoria} 
-              onChange={(v) => updateField("categoria", v)} 
-              options={demands.map(d => d.nome)} 
-              col="col-sm-6"
-            />
-            <Input 
-              label="Bloco Físico" 
-              value={form.bloco} 
-              onChange={(v) => updateField("bloco", v)} 
-              col="col-sm-6"
-              placeholder="Ex: Bloco A"
-            />
-            <Input 
-              label="Sala / Laboratório" 
-              value={form.sala} 
-              onChange={(v) => updateField("sala", v)} 
-              col="col-sm-6"
-              placeholder="Ex: Sala 102"
-            />
-            <TextArea 
-              label="Descrição Detalhada do Problema" 
-              value={form.descricao} 
-              onChange={(v) => updateField("descricao", v)} 
-              placeholder="Forneça detalhes técnicos do mau funcionamento ou comportamento do equipamento..."
-            />
+      {/* 🧭 STEPPER VISUAL MODERNO */}
+      <div className="mx-auto mb-5 d-flex justify-content-between position-relative" style={{ maxWidth: '400px' }}>
+        <div className="position-absolute w-100 stepper-line"></div>
+        <div className="d-flex flex-column align-items-center">
+          <div className={`step-dot ${wizardStep >= 1 ? 'active' : ''} ${wizardStep > 1 ? 'completed' : ''}`}>
+            {wizardStep > 1 ? <i className="fa-solid fa-check"></i> : '1'}
+          </div>
+          <span className="mt-2 small fw-semibold text-muted" style={{ fontSize: '10px' }}>Identificação</span>
+        </div>
+        <div className="d-flex flex-column align-items-center">
+          <div className={`step-dot ${wizardStep === 2 ? 'active' : ''}`}>2</div>
+          <span className="mt-2 small fw-semibold text-muted" style={{ fontSize: '10px' }}>Revisão e Envio</span>
+        </div>
+      </div>
+
+      <div className="mx-auto" style={{ maxWidth: '800px' }}>
+        {errorBanner && (
+          <div className="alert alert-danger border-0 shadow-sm small py-2 mb-4 animate__animated animate__shakeX">
+            <i className="fa-solid fa-triangle-exclamation me-2"></i>{errorBanner}
+          </div>
+        )}
+
+        {wizardStep === 1 ? (
+          <form onSubmit={(e) => { e.preventDefault(); setWizardStep(2); }} className="d-flex flex-column gap-5">
             
-            <div className="col-12 d-flex justify-content-end mt-4">
+            {/* Seção 01: Localização */}
+            <section>
+              <h3 className="section-title">Onde está o problema?</h3>
+              <div className="row g-4">
+                <div className="col-md-6">
+                  <label className="form-label small fw-semibold text-secondary">Bloco / Prédio</label>
+                  <input 
+                    type="text" 
+                    className="form-control form-control-lg border-light-subtle shadow-none fs-6" 
+                    placeholder="Ex: Bloco A" 
+                    value={setor} 
+                    onChange={(e) => setSetor(e.target.value)} 
+                    required 
+                  />
+                  <span className="form-helper-text">Indique o pavilhão principal do campus.</span>
+                </div>
+                <div className="col-md-6">
+                  <label className="form-label small fw-semibold text-secondary">Sala ou Laboratório</label>
+                  <input 
+                    type="text" 
+                    className="form-control form-control-lg border-light-subtle shadow-none fs-6" 
+                    placeholder="Ex: Sala 102" 
+                    value={localExato} 
+                    onChange={(e) => setLocalExato(e.target.value)} 
+                    required 
+                  />
+                  <span className="form-helper-text">Número da sala ou nome do laboratório.</span>
+                </div>
+              </div>
+            </section>
+
+            {/* Seção 02: Classificação */}
+            <section>
+              <h3 className="section-title">Classificação do chamado</h3>
+              <div className="row g-4">
+                <div className="col-12">
+                  <label className="form-label small fw-semibold text-secondary">Categoria técnica</label>
+                  <select 
+                    className="form-select form-select-lg border-light-subtle shadow-none fs-6" 
+                    value={categoria} 
+                    onChange={e => setCategoria(e.target.value)}
+                  >
+                    {CATEGORIAS_GTI.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+                  </select>
+                </div>
+                <div className="col-12">
+                  <TextArea 
+                    label="O que está acontecendo?" 
+                    value={descricao} 
+                    onChange={setDescricao} 
+                    placeholder="Descreva o defeito de forma breve e clara..." 
+                    rows={4} 
+                    className="form-control-lg border-light-subtle shadow-none fs-6" 
+                  />
+                  <div className="d-flex justify-content-between mt-2">
+                    <span className="form-helper-text">Mínimo de 10 caracteres para validar o envio.</span>
+                    <span className={`char-counter font-monospace ${descricao.length >= 10 ? 'text-success border-success-subtle' : ''}`}>
+                      {descricao.length} carac.
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            {/* Rodapé de Ação */}
+            <div className="pt-4 border-top d-flex align-items-center justify-content-between">
+              <div className={`px-3 py-2 rounded-pill font-monospace fw-bold d-flex align-items-center gap-2 ${infoPrazo.bg}`} style={{ color: infoPrazo.cor, fontSize: '10px' }}>
+                <i className="fa-solid fa-clock"></i> SLA: {infoPrazo.prazo}
+              </div>
               <button 
                 type="submit" 
-                className="btn-icet px-4" 
-                disabled={isFormInvalid || submitting}
+                className="btn btn-primary px-5 py-2.5 fw-bold shadow-sm d-flex align-items-center gap-2 rounded-3 border-0"
+                disabled={isFormInvalid}
+                style={{ backgroundColor: isFormInvalid ? '#cbd5e1' : '#0284c7', transition: 'all 0.2s' }}
               >
-                {submitting ? "Transmitindo Dados..." : "Registrar Ordem de Serviço"}
+                Avançar para Revisão <i className="fa-solid fa-arrow-right small"></i>
               </button>
             </div>
           </form>
-        </div>
+        ) : (
+          /* TELA DE REVISÃO (STEP 2) */
+          <div className="animate__animated animate__fadeIn">
+            <h3 className="section-title mb-4">Confirme os detalhes da solicitação</h3>
+            <div className="bg-white border border-light-subtle rounded-4 p-4 shadow-sm mb-5">
+              <div className="row g-4 font-monospace">
+                <div className="col-md-6">
+                  <span className="text-muted d-block small fw-bold mb-1">LOCALIZAÇÃO</span>
+                  <span className="text-dark fs-6 text-uppercase fw-bold">{setor} — {localExato}</span>
+                </div>
+                <div className="col-md-6">
+                  <span className="text-muted d-block small fw-bold mb-1">CATEGORIA</span>
+                  <span className="text-primary fs-6 fw-bold">{categoria}</span>
+                </div>
+                <div className="col-12 border-top pt-3">
+                  <span className="text-muted d-block small fw-bold mb-2">DESCRIÇÃO INFORMADA</span>
+                  <div className="p-3 bg-light bg-opacity-50 rounded-3 text-secondary lh-base" style={{ fontSize: '13px' }}>
+                    "{descricao}"
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="d-flex justify-content-between align-items-center">
+              <button 
+                type="button" 
+                className="btn btn-link text-secondary text-decoration-none fw-bold small" 
+                onClick={() => setWizardStep(1)}
+              >
+                <i className="fa-solid fa-chevron-left me-2"></i>Voltar e editar
+              </button>
+              <button 
+                type="button" 
+                className="btn btn-success px-5 py-3 fw-bold shadow d-flex align-items-center gap-2 rounded-3 border-0 text-white" 
+                onClick={handleFinalSubmit} 
+                disabled={submitting}
+                style={{ backgroundColor: '#059669', minWidth: '280px' }}
+              >
+                {submitting ? (
+                  <><span className="spinner-border spinner-border-sm"></span> Registrando no Sistema...</>
+                ) : (
+                  <><i className="fa-solid fa-paper-plane"></i> Confirmar e Abrir Chamado</>
+                )}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
-    </section>
+    </div>
   );
 }

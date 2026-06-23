@@ -1,6 +1,6 @@
 /* ============================================================================
-   VARIÁVEIS DE DESIGN - TECH ICET (SÊN_IOR & PRODUÇÃO)
-   ============================================================================ */
+    VARIÁVEIS DE DESIGN - TECH ICET (SÊNIOR & PRODUÇÃO COMA GERAÇÃO DE TOKENS)
+    ============================================================================ */
 :root {
   /* Paleta de Cores de Alta Fidelidade (Design Baseado em Escala de Cinzas Avançada) */
   --icet-primary: #059669;       /* Verde Esmeralda Institucional */
@@ -42,7 +42,6 @@ body {
    UPGRADE DE COMPONENTES - HEURÍSTICA 8 (ESTÉTICA MINIMALISTA E ENGENHARIA DE UI)
    ============================================================================ */
 
-/* 🎨 MANUTENÇÃO EVOLUTIVA: Cards de Superfície com Elevação e Profundidade Tridimensional */
 .surface {
   background: var(--icet-surface);
   border-radius: var(--radius-md);
@@ -52,7 +51,6 @@ body {
   transition: var(--transition-smooth);
 }
 
-/* Interação Sutil no Painel de Gerenciamento ou Dashboards */
 .surface:hover {
   transform: translateY(-2px);
   box-shadow: var(--shadow-lg);
@@ -86,7 +84,7 @@ body {
   transform: translateY(0);
 }
 
-/* 🛡️ MANUTENÇÃO PREVENTIVA: Contraste de Acessibilidade para Botões Desabilitados */
+
 .btn-icet:disabled {
   background-color: #e2e8f0 !important;
   color: #94a3b8 !important;
@@ -171,7 +169,7 @@ body {
   border-left: 3px solid var(--icet-primary);
 }
 
-/* 🚀 MANUTENÇÃO EVOLUTIVA: Efeito Pulsante de Skeleton Screen para Carregamentos Assíncronos */
+
 .skeleton-pulsing {
   background: linear-gradient(90deg, #f1f5f9 25%, #e2e8f0 50%, #f1f5f9 75%);
   background-size: 200% 100%;
