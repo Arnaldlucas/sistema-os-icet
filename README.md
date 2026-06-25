@@ -121,7 +121,7 @@ docker compose up --build
 <h3>Passo 4: Acessar os Módulos do Sistema</h3>
 <p>Assim que os logs do terminal indicarem que o Uvicorn e o Vite inicializaram, abra o seu navegador de internet e utilize os seguintes links de acesso:</p>
 <ul>
-    <li>💻 <strong>Interface de Navegação (Frontend React):</strong> <a href="http://localhost:3000" target="_blank">http://localhost:3000</a></li>
+    <li>💻 <strong>Interface de Navegação (Frontend React):</strong> <a href="http://localhost:5173" target="_blank">http://localhost:3000</a></li>
     <li>⚙️ <strong>Documentação Interativa da API (Swagger UI Backend):</strong> <a href="http://localhost:8000/docs" target="_blank">http://localhost:8000/docs</a></li>
 </ul>
 
