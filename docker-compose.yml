@@ -1,6 +1,8 @@
+version: '3.8'
+
 services:
   # ==========================================
-  # 1. BANCO DE DADOS (POSTGRESQL 15)
+  # 1. MOTOR DE DADOS: POSTGRESQL 15
   # ==========================================
   database:
     image: postgres:15
@@ -14,11 +16,16 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d sistema_os_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     networks:
-      - gti_network
+      - os_network
 
   # ==========================================
-  # 2. BACKEND (FASTAPI + ASYNCPG)
+  # 2. CAMADA DE NEGÓCIO: FASTAPI ASGI
   # ==========================================
   backend:
     build: ./os-backend
@@ -27,43 +34,43 @@ services:
     ports:
       - "8000:8000"
     environment:
-      # String de conexão assíncrona usando as credenciais corretas do Postgres
       DATABASE_URL: "postgresql+asyncpg://postgres:root_password_ufam_2026@database:5432/sistema_os_db"
-      
-      # Segurança JWT (Mapeada do seu auth_routers.py)
       SECRET_KEY: "SUPER_SECRET_KEY_MIGRACAO_UFAM_ICET_2026_SECURITY"
       ALGORITHM: "HS256"
       ACCESS_TOKEN_EXPIRE_MINUTES: 480
-      
-      # Mensageria SMTP Institucional
       SMTP_HOST: "smtp.gmail.com"
       SMTP_PORT: 587
       SMTP_USER: "arnaldff@gmail.com"
       SMTP_PASSWORD: "lsjcpvgpmamlvjdb"
+    volumes:
+      # Volume nomeado compartilhado para as fotos persistirem e não sumirem no down
+      - os_media_data:/app/.data/uploads
     depends_on:
-      - database
+      database:
+        condition: service_healthy
     networks:
-      - gti_network
+      - os_network
 
   # ==========================================
-  # 3. FRONTEND (REACTIVE INTERFACE)
+  # 3. CAMADA DE APRESENTAÇÃO: REACT + VITE
   # ==========================================
   frontend:
     build: ./os-frontend
     container_name: sistema_os_frontend
     restart: always
     ports:
-      - "3000:3000"
+      - "5600:5600"
     environment:
-      - REACT_APP_API_URL=http://localhost:8000
+      - VITE_API_URL=http://localhost:8000
     depends_on:
       - backend
     networks:
-      - gti_network
+      - os_network
 
 volumes:
   postgres_data:
+  os_media_data:
 
 networks:
-  gti_network:
+  os_network:
     driver: bridge

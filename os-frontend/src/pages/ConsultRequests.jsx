@@ -28,7 +28,7 @@ function StatBadge({ label, value, color = "#10b981", icon, onClick }) {
  * @description Componente de Consulta, Triagem e Emissão de Auditoria de Ordens de Serviço do ICET.
  */
 export function ConsultRequests({ requests = [], onUpdateStatus, triggerModalConfirm }) {
-  const { user } = useAuth();
+  const { user, categorias } = useAuth();
 
   const userCargo = user?.cargo?.toLowerCase() || "";
   const userEmail = user?.email?.toLowerCase() || "";
@@ -49,6 +49,11 @@ export function ConsultRequests({ requests = [], onUpdateStatus, triggerModalCon
   const [textoParecer, setTextoParecer] = useState('');
   const [ticker, setTicker] = useState(Date.now());
 
+  // Estados de Controle de UX de Alta Fidelidade (Lightbox e Recusa Direta)
+  const [activeLightboxImg, setActiveLightboxImg] = useState(null);
+  const [showRecusaModal, setShowRecusaModal] = useState(false);
+  const [justificativaRecusa, setJustificativaRecusa] = useState('');
+
   useEffect(() => {
     const timer = setInterval(() => setTicker(Date.now()), 60000);
     return () => clearInterval(timer);
@@ -58,18 +63,22 @@ export function ConsultRequests({ requests = [], onUpdateStatus, triggerModalCon
     const handleKeyDown = (e) => {
       if (e.key === 'Escape') {
         setSelectedRequest(null);
+        setActiveLightboxImg(null);
+        setShowRecusaModal(false);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
+  // 🚀 REQUISITO CATÁLOGO: Sincroniza os filtros dinâmicos com o banco de dados
   const uniqueCategories = useMemo(() => {
-    return ['Todas', 'REDE E CONECTIVIDADE', 'HARDWARE E EQUIPAMENTOS', 'SISTEMAS E SOFTWARE', 'AUDIOVISUAL', 'SEGURANÇA DA INFORMAÇÃO / ACESSO', 'OUTROS / SOLICITAÇÃO GERAL'];
-  }, []);
+    const listaBase = Array.isArray(categorias) ? categorias.map(c => c.nome) : [];
+    return ['Todas', ...listaBase];
+  }, [categorias]);
 
   const calcularSlaContexto = (criadoEm) => {
-    if (!criadoEm) return { texto: "SLA Não Monitorado", critico: false, percentual: 100, corBarra: "#10b981" };
+    if (!criadoEm) return { texto: "SLA Não Monitorado", critico: false, percentual: 100, colorBarra: "#10b981" };
     try {
       const dataCriacao = new Date(criadoEm).getTime();
       const limiteSla = dataCriacao + (24 * 60 * 60 * 1000); 
@@ -79,19 +88,19 @@ export function ConsultRequests({ requests = [], onUpdateStatus, triggerModalCon
 
       let percentual = Math.max(0, Math.min(100, (milissegundosRestantes / totalSlaMs) * 100));
       
-      let corBarra = "#10b981"; 
-      if (horasRestantes <= 4) corBarra = "#ef4444"; 
-      else if (horasRestantes <= 12) corBarra = "#f59e0b"; 
+      let colorBarra = "#10b981"; 
+      if (horasRestantes <= 4) colorBarra = "#ef4444"; 
+      else if (horasRestantes <= 12) colorBarra = "#f59e0b"; 
 
       if (horasRestantes <= 0) {
-        return { texto: "SLA ESTOURADO", critico: true, percentual: 100, corBarra: "#ef4444" };
+        return { texto: "SLA ESTOURADO", critico: true, percentual: 100, colorBarra: "#ef4444" };
       }
       if (horasRestantes <= 4) {
-        return { texto: `URGENTE — ${horasRestantes}h restantes`, critico: true, percentual, corBarra };
+        return { texto: `URGENTE — ${horasRestantes}h restantes`, critico: true, percentual, colorBarra };
       }
-      return { texto: `${horasRestantes}h restantes`, critico: false, percentual, corBarra };
+      return { texto: `${horasRestantes}h restantes`, critico: false, percentual, colorBarra };
     } catch {
-      return { texto: "24h estimadas", critico: false, percentual: 100, corBarra: "#10b981" };
+      return { texto: "24h estimadas", critico: false, percentual: 100, colorBarra: "#10b981" };
     }
   };
 
@@ -162,9 +171,9 @@ export function ConsultRequests({ requests = [], onUpdateStatus, triggerModalCon
 
   const analytics = useMemo(() => {
     const total = filteredRequests.length;
-    const pendentes = filteredRequests.filter(r => ['ABERTO', 'PENDENTE', 'EM_ATENDIMENTO', 'ATENDIMENTO'].includes(String(r.status || '').toUpperCase())).length;
     const resolvidos = filteredRequests.filter(r => String(r.status || '').toUpperCase() === 'RESOLVIDO').length;
     const cancelados = filteredRequests.filter(r => String(r.status || '').toUpperCase() === 'CANCELADO').length;
+    const pendentes = total - (resolvidos + cancelados);
     
     const taxaEficiencia = total > 0 ? Math.round((resolvidos / total) * 100) : 0;
 
@@ -195,6 +204,7 @@ export function ConsultRequests({ requests = [], onUpdateStatus, triggerModalCon
   const handleSelectRequest = (req) => {
     setSelectedRequest(req);
     setTextoParecer('');
+    setJustificativaRecusa('');
   };
 
   const executeStatusChange = async (safeId, statusPayload, newStatus, parecerTexto = null) => {
@@ -204,16 +214,19 @@ export function ConsultRequests({ requests = [], onUpdateStatus, triggerModalCon
       setSelectedRequest(prev => {
         if (!prev) return null;
         const listaTimeline = Array.isArray(prev.timeline) ? prev.timeline : [];
+        const prefixoTimeline = statusPayload === 'CANCELADO' ? "Justificativa de Recusa" : "Parecer Técnico";
         const novaInteracao = {
           id: Date.now(),
           autor_nome: user?.nome_completo || "Sistema",
           status_novo: statusPayload,
-          conteudo: parecerTexto ? `Parecer Técnico por ${user?.nome_completo}: ${parecerTexto}` : `Status modificado operacionalmente para ${newStatus}.`,
+          conteudo: parecerTexto ? `${prefixoTimeline} por ${user?.nome_completo}: ${parecerTexto}` : `Status modificado operacionalmente para ${newStatus}.`,
           criado_em: new Date().toISOString()
         };
         return { ...prev, status: statusPayload, timeline: [novaInteracao, ...listaTimeline] };
       });
       setTextoParecer('');
+      setJustificativaRecusa('');
+      setShowRecusaModal(false);
     }
     setUpdatingId(null);
   };
@@ -226,7 +239,12 @@ export function ConsultRequests({ requests = [], onUpdateStatus, triggerModalCon
     if (newStatus === 'Resolvido') statusPayload = 'RESOLVIDO';
     if (newStatus === 'Cancelado') statusPayload = 'CANCELADO';
 
-    if ((statusPayload === 'RESOLVIDO' || statusPayload === 'CANCELADO') && !textoParecer.trim()) {
+    if (statusPayload === 'CANCELADO' && String(selectedRequest?.status).toUpperCase() === 'PENDENTE') {
+      setShowRecusaModal(true);
+      return;
+    }
+
+    if (statusPayload === 'RESOLVIDO' && !textoParecer.trim()) {
       alert("Erro de Auditoria: É obrigatório descrever o Parecer Técnico de encerramento antes de concluir a Ordem de Serviço.");
       return;
     }
@@ -244,11 +262,29 @@ export function ConsultRequests({ requests = [], onUpdateStatus, triggerModalCon
     }
   };
 
+  const handleConfirmarRecusaDireta = () => {
+    if (!justificativaRecusa.trim() || justificativaRecusa.trim().length < 10) {
+      alert("Erro de Validação: A justificativa de recusa precisa conter no mínimo 10 caracteres.");
+      return;
+    }
+    executeStatusChange(selectedRequest.id, 'CANCELADO', 'Cancelado', justificativaRecusa.trim());
+  };
+
+  // 🚀 INTERCEPTADOR E CORRETOR DE FUSO HORÁRIO (Ajusta o desvio exato de 2h do contêiner)
   const formatarData = (isoString) => {
     try {
       if (!isoString) return 'Data indisponível';
       const d = new Date(isoString);
-      return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' }) + ' — ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+      
+      // ✅ FIX DO HORÁRIO ADIANTADO: Remove matematicamente o offset residual de 2h injetado pelo contêiner
+      const timestampCorrigido = d.getTime() - (2 * 60 * 60 * 1000);
+      const dataFinal = new Date(timestampCorrigido);
+
+      return dataFinal.toLocaleDateString('pt-BR', { 
+        day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'America/Manaus' 
+      }) + ' — ' + dataFinal.toLocaleTimeString('pt-BR', { 
+        hour: '2-digit', minute: '2-digit', timeZone: 'America/Manaus' 
+      });
     } catch {
       return 'Data indisponível';
     }
@@ -263,14 +299,13 @@ export function ConsultRequests({ requests = [], onUpdateStatus, triggerModalCon
   };
 
   const obterTextoBotaoCancelamento = () => {
-    if (isAdmin) return "Recusar Chamado";
-    if (user?.role === "tecnico" || userCargo.includes("subgerente")) return "Cancelar Atendimento";
-    return "Cancelar Solicitação";
+    if (String(selectedRequest?.status).toUpperCase() === 'PENDENTE') return "Recusar Chamado";
+    return "Cancelar Atendimento";
   };
 
   const encontrarParecerSalvo = (timeline) => {
     if (!Array.isArray(timeline)) return null;
-    const item = [...timeline].reverse().find(t => String(t.conteudo).includes("Parecer Técnico"));
+    const item = [...timeline].reverse().find(t => String(t.conteudo).includes("Parecer Técnico") || String(t.conteudo).includes("Justificativa de Recusa"));
     if (item) return item.conteudo;
     return null;
   };
@@ -295,7 +330,6 @@ export function ConsultRequests({ requests = [], onUpdateStatus, triggerModalCon
           100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
         }
         
-        /* 🎨 LINHA DO TEMPO REESTRUTURADA E FLUIDA */
         .custom-timeline-line { position: relative; padding-left: 20px; }
         .custom-timeline-line::before { content: ''; position: absolute; left: 4px; top: 8px; bottom: 8px; width: 2px; background-color: #e2e8f0; }
         .custom-timeline-node { position: relative; margin-bottom: 1.25rem; }
@@ -303,6 +337,9 @@ export function ConsultRequests({ requests = [], onUpdateStatus, triggerModalCon
         .custom-timeline-node.status-fechado::before { background-color: #10b981; }
         .custom-timeline-node.status-atendimento::before { background-color: #f59e0b; }
         
+        .lightbox-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; z-index: 99999; }
+        .lightbox-img { max-width: 90%; max-height: 85vh; border-radius: 6px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.5); cursor: zoom-out; transition: transform 0.2s ease; }
+
         @media print {
           body * { visibility: hidden; background: transparent !important; color: #000000 !important; box-shadow: none !important; }
           .secao-impressao-oficial, .secao-impressao-oficial * { visibility: visible; }
@@ -355,7 +392,7 @@ export function ConsultRequests({ requests = [], onUpdateStatus, triggerModalCon
             <div className="col-6 col-md-2">
               <select className="form-select" value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
                 {uniqueCategories.map(cat => (
-                  <option key={cat} value={cat}>{cat === 'Todas' ? 'Todas Categorias' : cat.substring(0,15) + '...'}</option>
+                  <option key={cat} value={cat}>{cat === 'Todas' ? 'Todas Categorias' : cat}</option>
                 ))}
               </select>
             </div>
@@ -395,7 +432,7 @@ export function ConsultRequests({ requests = [], onUpdateStatus, triggerModalCon
                 <tbody>
                   {filteredRequests.length === 0 ? (
                     <tr>
-                      <td colSpan={isTecnico ? 6 : 5} className="text-center py-5 text-muted small font-monospace">Nenhuma ordem de serviço localizada para os critérios selecionados.</td>
+                      <td colSpan={isTecnico ? 6 : 5} className="text-center py-5 text-muted small font-monospace">Nenhuma ordem de serviço localizada.</td>
                     </tr>
                   ) : (
                     filteredRequests.map((req) => (
@@ -403,16 +440,11 @@ export function ConsultRequests({ requests = [], onUpdateStatus, triggerModalCon
                         <td className="ps-4 font-monospace fw-bold text-muted">#{req.id}</td>
                         <td>
                           <span className="d-block fw-bold text-dark small">{higienizarAssuntoOS(req?.titulo)}</span>
-                          <small className="text-muted font-monospace" style={{ fontSize: '10px' }}>Por: {req?.nome || req?.criador_nome || "Servidor do Instituto"}</small>
+                          <small className="text-muted font-monospace" style={{ fontSize: '10px' }}>Por: {req?.nome || req?.criador_nome || "Servidor"}</small>
                         </td>
                         <td>
                           <span className="d-block small fw-semibold text-dark">{req?.categoria}</span>
                           <small className="text-muted">{req?.bloco} &mdash; {req?.sala}</small>
-                          {isTecnico && Math.sign(req.status) !== 1 && !['RESOLVIDO', 'CANCELADO'].includes(String(req.status).toUpperCase()) && (
-                            <div className="progress mt-1" style={{ height: '3px', width: '120px' }}>
-                              <div className="progress-bar" role="progressbar" style={{ width: `${req._sla.percentual}%`, backgroundColor: req._sla.corBarra }} />
-                            </div>
-                          )}
                         </td>
                         <td>{renderBadgeStatus(req?.status)}</td>
                         {isTecnico && (
@@ -435,7 +467,7 @@ export function ConsultRequests({ requests = [], onUpdateStatus, triggerModalCon
         ) : (
           <div className="row g-3 animate__animated animate__fadeIn">
             <div className="col-md-4">
-              <div className="p-3 bg-light rounded-3 border-top border-danger border-3 shadow-sm" style={{ minHeight: '500px', backgroundColor: '#fff5f5' }}>
+              <div className="p-3 bg-light rounded-3 border-top border-danger border-3 shadow-sm" style={{ minHeight: '500px' }}>
                 <span className="fw-bold text-danger font-monospace small d-block mb-3 text-uppercase"><i className="fa-solid fa-circle-exclamation me-1"></i> Pendentes ({kanbanColumns.pendentes.length})</span>
                 <div className="d-flex flex-column gap-2">
                   {kanbanColumns.pendentes.map(req => (
@@ -446,9 +478,6 @@ export function ConsultRequests({ requests = [], onUpdateStatus, triggerModalCon
                       </div>
                       <span className="d-block fw-bold text-dark small mb-1">{higienizarAssuntoOS(req?.titulo)}</span>
                       <small className="text-muted font-monospace d-block mb-2" style={{ fontSize: '10px' }}>{req.bloco} - {req.sala}</small>
-                      <div className="progress" style={{ height: '3px' }}>
-                        <div className="progress-bar" style={{ width: `${req._sla.percentual}%`, backgroundColor: req._sla.corBarra }} />
-                      </div>
                     </div>
                   ))}
                 </div>
@@ -456,20 +485,16 @@ export function ConsultRequests({ requests = [], onUpdateStatus, triggerModalCon
             </div>
 
             <div className="col-md-4">
-              <div className="p-3 bg-light rounded-3 border-top border-warning border-3 shadow-sm" style={{ minHeight: '500px', backgroundColor: '#fffdf5' }}>
+              <div className="p-3 bg-light rounded-3 border-top border-warning border-3 shadow-sm" style={{ minHeight: '500px' }}>
                 <span className="fw-bold text-warning font-monospace small d-block mb-3 text-uppercase"><i className="fa-solid fa-spinner me-1"></i> Em Curso ({kanbanColumns.atendimento.length})</span>
                 <div className="d-flex flex-column gap-2">
                   {kanbanColumns.atendimento.map(req => (
                     <div className="card border-0 shadow-sm p-3 bg-white rounded-3" key={req.id} style={{ cursor: 'pointer' }} onClick={() => handleSelectRequest(req)}>
                       <div className="d-flex justify-content-between font-monospace text-muted mb-2" style={{ fontSize: '10px' }}>
                         <strong>#{req.id}</strong>
-                        <span className={req._sla.critico ? "text-danger fw-bold" : "text-secondary"}>{req._sla.texto.split('—')[0]}</span>
                       </div>
-                      <span className="d-block fw-bold text-dark small mb-1">{higienizarAssunctionOS(req?.titulo)}</span>
+                      <span className="d-block fw-bold text-dark small mb-1">{higienizarAssuntoOS(req?.titulo)}</span>
                       <small className="text-muted font-monospace d-block mb-2" style={{ fontSize: '10px' }}>{req.bloco} - {req.sala}</small>
-                      <div className="progress" style={{ height: '3px' }}>
-                        <div className="progress-bar" style={{ width: `${req._sla.percentual}%`, backgroundColor: req._sla.corBarra }} />
-                      </div>
                     </div>
                   ))}
                 </div>
@@ -477,16 +502,15 @@ export function ConsultRequests({ requests = [], onUpdateStatus, triggerModalCon
             </div>
 
             <div className="col-md-4">
-              <div className="p-3 bg-light rounded-3 border-top border-success border-3 shadow-sm" style={{ minHeight: '500px', backgroundColor: '#f5fff8' }}>
+              <div className="p-3 bg-light rounded-3 border-top border-success border-3 shadow-sm" style={{ minHeight: '500px' }}>
                 <span className="fw-bold text-success font-monospace small d-block mb-3 text-uppercase"><i className="fa-solid fa-circle-check me-1"></i> Concluídos ({kanbanColumns.concluidos.length})</span>
                 <div className="d-flex flex-column gap-2">
                   {kanbanColumns.concluidos.map(req => (
                     <div className="card border-0 shadow-sm p-3 bg-white rounded-3 opacity-75" key={req.id} style={{ cursor: 'pointer' }} onClick={() => handleSelectRequest(req)}>
                       <div className="d-flex justify-content-between font-monospace text-muted mb-1" style={{ fontSize: '10px' }}>
                         <strong>#{req.id}</strong>
-                        <span className="text-success fw-bold">CONCLUÍDO</span>
                       </div>
-                      <span className="d-block fw-normal text-secondary small text-decoration-line-through">{higienizarAssuntoOS(req?.titulo)}</span>
+                      <span className="d-block text-secondary small">{higienizarAssuntoOS(req?.titulo)}</span>
                       <small className="text-muted font-monospace d-block" style={{ fontSize: '10px' }}>{req.bloco} - {req.sala}</small>
                     </div>
                   ))}
@@ -497,12 +521,11 @@ export function ConsultRequests({ requests = [], onUpdateStatus, triggerModalCon
         )}
       </div>
 
-      {/* 📑 SEÇÃO LATERAL DE ANÁLISE — APENAS MELHORIAS VISUAIS DE ALTA FIDELIDADE */}
       {selectedRequest && (
         <div className="col-lg-4 animate__animated animate__fadeInRight d-print-none">
           <div className="card border border-light-subtle shadow-sm p-4 bg-white rounded-3 d-flex flex-column gap-4" style={{ maxHeight: '85vh', overflowY: 'auto' }}>
             
-            <div className="d-flex justify-content-between align-items-center pb-2.5 border-bottom border-light-subtle">
+            <div className="d-flex justify-content-between align-items-center pb-2 border-bottom border-light-subtle">
               <div>
                 <span className="small font-monospace fw-bold d-block mb-0.5" style={{ color: '#10b981', fontSize: '10px', letterSpacing: '0.5px' }}>TRIAGEM OPERACIONAL</span>
                 <strong className="text-dark h5 fw-extrabold m-0 font-monospace">Ordem de Serviço #{selectedRequest.id}</strong>
@@ -510,14 +533,55 @@ export function ConsultRequests({ requests = [], onUpdateStatus, triggerModalCon
               <button className="btn-close shadow-none btn-sm" onClick={() => setSelectedRequest(null)}></button>
             </div>
 
-            {/* Configuração de Pares Chave-Valor Limpos sem Caixas Falsas Pesadas */}
             <div className="p-3 bg-light bg-opacity-40 border border-light-subtle rounded-3 font-monospace" style={{ fontSize: '11.5px', color: '#475569' }}>
               <span className="text-uppercase text-muted fw-bold d-block mb-2" style={{ fontSize: '9px', letterSpacing: '0.5px' }}>📋 Detalhes e Identificação</span>
               <div className="mb-1">Solicitante: <strong className="text-dark fw-semibold">{selectedRequest?.nome || selectedRequest?.criador_nome || "Servidor"}</strong></div>
-              {selectedRequest?.email && <div className="mb-1 text-truncate">E-mail: <span className="text-dark">{selectedRequest.email}</span></div>}
               <div className="mb-1">Localização: <strong className="text-dark text-uppercase">{selectedRequest.bloco} &mdash; Sala {selectedRequest.sala}</strong></div>
               <div>Patrimônio: <span className="fw-bold text-dark">{selectedRequest.numero_patrimonio || "Uso Geral"}</span></div>
             </div>
+
+           {/* 🖼️ RENDERIZADOR DE EVIDÊNCIAS DIRETO DA FONTE (Bypass do Vite) */}
+            {Array.isArray(selectedRequest.anexos) && selectedRequest.anexos.length > 0 && (
+              <div>
+                <label className="text-muted font-monospace small d-block mb-1.5 fw-bold" style={{ fontSize: '10px', letterSpacing: '0.5px' }}>
+                  EVIDÊNCIA FOTOGRÁFICA ANEXA
+                </label>
+                <div className="d-flex flex-wrap gap-2">
+                  {selectedRequest.anexos.map(anexo => {
+                    // Bate direto na porta 8000 (Backend), ignorando o Proxy do Vite!
+                    const urlEndpoint = `http://localhost:8000/api/requests/anexos/${anexo.nome_armazenado}`;
+                    const urlEstatica = `http://localhost:8000/api/uploads/${anexo.nome_armazenado}`;
+                    
+                    return (
+                      <div 
+                        key={anexo.id} 
+                        className="position-relative border rounded-3 overflow-hidden bg-light" 
+                        style={{ width: '85px', height: '85px', cursor: 'pointer' }} 
+                        onClick={() => setActiveLightboxImg(urlEndpoint)}
+                      >
+                        <img 
+                          src={urlEndpoint} 
+                          alt={anexo.nome_original || "Evidência"} 
+                          className="w-100 h-100 object-fit-cover" 
+                          onError={(e) => { 
+                            // Fallback Duplo Inteligente: Se a primeira rota falhar, tenta a estática
+                            if (!e.target.dataset.triedFallback) {
+                                e.target.dataset.triedFallback = "true";
+                                e.target.src = urlEstatica;
+                            } else {
+                                e.target.src = "https://placehold.co/85x85?text=Erro+404";
+                            }
+                          }} 
+                        />
+                        <div className="position-absolute bottom-0 start-0 w-100 bg-dark bg-opacity-50 text-white text-center" style={{ fontSize: '8px', padding: '2px 0' }}>
+                          <i className="fa-solid fa-magnifying-glass-plus"></i> Zoom
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             <div>
               <label className="text-muted font-monospace small d-block mb-1.5 fw-bold" style={{ fontSize: '10px', letterSpacing: '0.5px' }}>DESCRIÇÃO DA OCORRÊNCIA</label>
@@ -526,15 +590,14 @@ export function ConsultRequests({ requests = [], onUpdateStatus, triggerModalCon
               </div>
             </div>
 
-            {/* Linha do Tempo Reestruturada com Nós Estilizados */}
             <div>
               <label className="text-muted font-monospace small d-block mb-3 fw-bold" style={{ fontSize: '10px', letterSpacing: '0.5px' }}>HISTÓRICO DE AUDITORIA</label>
               <div className="custom-timeline-line">
                 {Array.isArray(selectedRequest.timeline) && selectedRequest.timeline.length > 0 ? (
                   selectedRequest.timeline.map((evt, idx) => {
                     let nodeColorClass = "";
-                    if (evt.conteudo.includes("RESOLVIDO") || evt.conteudo.includes("Parecer Técnico")) nodeColorClass = "status-fechado";
-                    if (evt.conteudo.includes("EM_ATENDIMENTO")) nodeColorClass = "status-atendimento";
+                    if (evt.conteudo.includes("RESOLVIDO") || evt.conteudo.includes("Parecer Técnico") || evt.conteudo.includes("Justificativa de Recusa")) nodeColorClass = "status-fechado";
+                    if (evt.conteudo.includes("EM_ATENDIMENTO") || evt.conteudo.includes("Atendimento")) nodeColorClass = "status-atendimento";
 
                     return (
                       <div className={`custom-timeline-node ${nodeColorClass}`} key={evt.id || idx} style={{ fontSize: '11.5px' }}>
@@ -550,10 +613,9 @@ export function ConsultRequests({ requests = [], onUpdateStatus, triggerModalCon
               </div>
             </div>
 
-            {/* Feedback e Encerramento Operacional */}
             {parecerJaGravado ? (
               <div className="p-3 border border-success border-opacity-10 bg-success bg-opacity-10 rounded-3 animate__animated animate__fadeIn">
-                <span className="text-success small font-monospace fw-bold d-block mb-1" style={{ fontSize: '10px' }}><i className="fa-solid fa-square-check me-1"></i> Parecer Técnico Homologado</span>
+                <span className="text-success small font-monospace fw-bold d-block mb-1" style={{ fontSize: '10px' }}><i className="fa-solid fa-square-check me-1"></i> Despacho de Encerramento Homologado</span>
                 <p className="small text-dark m-0 fst-italic lh-base" style={{ whiteSpace: 'pre-line', fontSize: '12px' }}>{parecerJaGravado}</p>
               </div>
             ) : (
@@ -599,7 +661,6 @@ export function ConsultRequests({ requests = [], onUpdateStatus, triggerModalCon
                     className="btn btn-sm btn-outline-danger w-100 font-monospace py-2 fw-bold shadow-none" 
                     style={{ fontSize: '11px' }} 
                     onClick={() => handleStatusChange(selectedRequest.id, 'Cancelado')}
-                    disabled={String(selectedRequest.status).toUpperCase() === 'EM_ATENDIMENTO' && !textoParecer.trim()}
                   >
                     <i className="fa-solid fa-ban me-1"></i> {obterTextoBotaoCancelamento()}
                   </button>
@@ -614,53 +675,19 @@ export function ConsultRequests({ requests = [], onUpdateStatus, triggerModalCon
         </div>
       )}
 
-      {/* 🧾 MODAL BALANÇO FECHAMENTO (OFICIAL DE IMPRESSÃO) */}
+      {/* 🧾 MODAL BALANÇO FECHAMENTO (IMPRESSÃO DE LAUDOS E SINC DE CONCLUSÃO) */}
       {showReport && isTecnico && (
         <div className="position-fixed top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center" style={{ backgroundColor: 'rgba(15, 23, 42, 0.4)', zIndex: 9999, backdropFilter: 'blur(4px)' }}>
-          <div className="surface p-4 mx-3 bg-white rounded-3 secao-impressao-oficial shadow-lg border border-light-subtle" style={{ maxWidth: '840px', width: '100%', maxHeight: '90vh', overflowY: 'auto' }}>
+          <div className="surface p-4 mx-3 bg-white rounded-3 secao-impressao-oficial shadow-lg border border-light-subtle" style={{ maxWidth: '920px', width: '100%', maxHeight: '90vh', overflowY: 'auto' }}>
             <div className="text-center mb-4 pb-3 border-bottom">
               <h2 className="h5 fw-bold m-0 text-dark text-uppercase font-monospace">Universidade Federal do Amazonas</h2>
               <h3 className="h6 fw-semibold m-0 text-muted font-monospace mt-1">Instituto de Ciências Exatas e Tecnologia — ICET</h3>
               <small className="text-muted font-monospace d-block mt-3">Relatório Gerencial de Demandas Tecnológicas (Exercício {dateFilter})</small>
             </div>
-            
-            <div className="mb-4 p-3 bg-light bg-opacity-40 border rounded-3">
-              <h4 className="h6 fw-bold text-uppercase text-muted font-monospace mb-3" style={{ fontSize: '11px' }}>Volumetria Categórica Relativa:</h4>
-              <div className="row g-3 font-monospace" style={{ fontSize: '12px' }}>
-                <div className="col-md-6">
-                  <div className="d-flex align-items-center gap-2 mb-2">
-                    <span style={{ display: 'inline-block', width: '10px', height: '10px', backgroundColor: '#10b981', borderRadius: '2px' }}></span>
-                    <span>Infraestrutura de Redes / Internet: <strong>{analytics.cRede}</strong> ({analytics.pRede}%)</span>
-                  </div>
-                  <div className="d-flex align-items-center gap-2 mb-2">
-                    <span style={{ display: 'inline-block', width: '10px', height: '10px', backgroundColor: '#0284c7', borderRadius: '2px' }}></span>
-                    <span>Manutenção de Hardware / Equipamentos: <strong>{analytics.cHardware}</strong> ({analytics.pHardware}%)</span>
-                  </div>
-                  <div className="d-flex align-items-center gap-2">
-                    <span style={{ display: 'inline-block', width: '10px', height: '10px', backgroundColor: '#f59e0b', borderRadius: '2px' }}></span>
-                    <span>Sistemas / Engenharia de Softwares: <strong>{analytics.cSistemas}</strong> ({analytics.pSistemas}%)</span>
-                  </div>
-                </div>
-                <div className="col-md-6">
-                  <div className="d-flex align-items-center gap-2 mb-2">
-                    <span style={{ display: 'inline-block', width: '10px', height: '10px', backgroundColor: '#6366f1', borderRadius: '2px' }}></span>
-                    <span>Audiovisual: <strong>{analytics.cAudio}</strong> ({analytics.pAudio}%)</span>
-                  </div>
-                  <div className="d-flex align-items-center gap-2 mb-2">
-                    <span style={{ display: 'inline-block', width: '10px', height: '10px', backgroundColor: '#ef4444', borderRadius: '2px' }}></span>
-                    <span>Segurança da Informação / Acesso: <strong>{analytics.cSeguranca}</strong> ({analytics.pSeguranca}%)</span>
-                  </div>
-                  <div className="d-flex align-items-center gap-2">
-                    <span style={{ display: 'inline-block', width: '10px', height: '10px', backgroundColor: '#64748b', borderRadius: '2px' }}></span>
-                    <span>Outros / Solicitação Geral: <strong>{analytics.cOutros}</strong> ({analytics.pOutros}%)</span>
-                  </div>
-                </div>
-              </div>
-            </div>
 
             <div className="row g-0 text-center mb-4 border rounded-3 overflow-hidden font-monospace small">
               <div className="col-3 p-2 bg-light border-end">
-                <span className="text-muted d-block text-uppercase fw-bold" style={{ fontSize: '9px' }}>Total Emitido</span>
+                <span className="text-muted d-block text-uppercase fw-bold" style={{ fontSize: '9px' }}>Total</span>
                 <strong className="text-dark fs-5">{analytics.total}</strong>
               </div>
               <div className="col-3 p-2 bg-light border-end">
@@ -672,7 +699,7 @@ export function ConsultRequests({ requests = [], onUpdateStatus, triggerModalCon
                 <strong className="text-secondary fs-5">{analytics.cancelados}</strong>
               </div>
               <div className="col-3 p-2 bg-light">
-                <span className="text-muted d-block text-uppercase fw-bold" style={{ fontSize: '9px' }}>Desempenho</span>
+                <span className="text-muted d-block text-uppercase fw-bold" style={{ fontSize: '9px' }}>Eficiência</span>
                 <strong className="text-dark fs-5">{analytics.taxaEficiencia}%</strong>
               </div>
             </div>
@@ -680,25 +707,27 @@ export function ConsultRequests({ requests = [], onUpdateStatus, triggerModalCon
             <div className="mb-4">
               <h4 className="h6 fw-bold text-uppercase text-muted font-monospace mb-2" style={{ fontSize: '11px' }}>Extrato de Ordens Auditadas</h4>
               <div className="table-responsive border rounded-3">
-                <table className="table table-sm table-striped table-hover font-monospace align-middle mb-0" style={{ fontSize: '11px' }}>
+                <table className="table table-sm table-striped font-monospace align-middle mb-0" style={{ fontSize: '11px' }}>
                   <thead className="table-light text-uppercase">
                     <tr>
-                      <th className="text-center" style={{ width: '60px' }}>OS</th>
-                      <th>Abertura</th>
+                      <th className="text-center" style={{ width: '50px' }}>OS</th>
+                      <th>Data Abertura</th>
+                      <th>Data Conclusão</th>
                       <th>Solicitante</th>
                       <th>Classificação / Assunto</th>
-                      <th>Localização Física</th>
-                      <th className="text-center" style={{ width: '100px' }}>Status</th>
+                      <th>Técnico Executor</th>
+                      <th className="text-center" style={{ width: '80px' }}>Status</th>
                     </tr>
                   </thead>
                   <tbody>
                     {filteredRequests.map(req => (
                       <tr key={req.id}>
                         <td className="text-center text-muted fw-bold">#{req.id}</td>
-                        <td className="small text-secondary">{formatarData(req?.criado_em || req?.data_abertura)}</td>
+                        <td className="small text-secondary">{formatarData(req?.criado_em)}</td>
+                        <td className="small text-success fw-semibold">{req?.data_conclusao ? formatarData(req.data_conclusao) : "⏳ Ativo"}</td>
                         <td className="fw-semibold text-dark">{req?.nome || req?.criador_nome || "Servidor"}</td>
-                        <td className="text-truncate" style={{ maxWidth: '180px' }}>{higienizarAssuntoOS(req?.titulo)}</td>
-                        <td>{req?.bloco || "N/A"} &mdash; {req?.sala || "N/A"}</td>
+                        <td>{req?.categoria} &mdash; {higienizarAssuntoOS(req?.titulo)}</td>
+                        <td className="text-muted fw-bold">{req?.tecnico_nome || "Aguardando"}</td>
                         <td className="text-center fw-bold">
                           {String(req?.status || '').toUpperCase() === 'RESOLVIDO' ? '✅ OK' : String(req?.status || '').toUpperCase() === 'CANCELADO' ? '❌ CANC' : '⏳ FILA'}
                         </td>
@@ -710,14 +739,60 @@ export function ConsultRequests({ requests = [], onUpdateStatus, triggerModalCon
             </div>
 
             <div className="d-flex gap-2 justify-content-end d-print-none mt-4 pt-3 border-top">
-              <button className="btn btn-sm btn-light border fw-bold px-4" onClick={() => setShowReport(false)}>Fechar Relatório</button>
-              <button className="btn btn-sm btn-success fw-bold px-4" style={{ backgroundColor: '#10b981', borderColor: '#10b981' }} onClick={() => window.print()}>
-                <i className="fa-solid fa-print me-2"></i>Imprimir Documento
-              </button>
+              <button className="btn btn-sm btn-light border fw-bold px-4" onClick={() => setShowReport(false)}>Fechar</button>
+              <button className="btn btn-sm btn-success fw-bold px-4" style={{ backgroundColor: '#10b981', borderColor: '#10b981' }} onClick={() => window.print()}><i className="fa-solid fa-print me-2"></i>Imprimir Balanço</button>
             </div>
           </div>
         </div>
       )}
+
+      {/* 🖼️ LIGHTBOX MODAL */}
+      {activeLightboxImg && (
+        <div className="lightbox-overlay" onClick={() => setActiveLightboxImg(null)}>
+          <button className="btn btn-link text-white position-absolute top-0 end-0 m-4 shadow-none text-decoration-none" style={{ fontSize: '24px' }}>
+            <i className="fa-solid fa-xmark"></i>
+          </button>
+          <img 
+            src={activeLightboxImg} 
+            alt="Evidência em Alta Resolução" 
+            className="lightbox-img animate__animated animate__zoomIn" 
+            onClick={(e) => e.stopPropagation()} 
+            onError={(e) => {
+               // Fallback também aplicado no Zoom
+               const fallbackUrl = activeLightboxImg.replace('/api/requests/anexos/', '/api/uploads/');
+               if (e.target.src !== fallbackUrl) {
+                   e.target.src = fallbackUrl;
+               }
+            }}
+          />
+        </div>
+      )}
+
+      {/* ❌ MODAL DE JUSTIFICATIVA OBRIGATÓRIA */}
+      {showRecusaModal && (
+        <div className="position-fixed top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center animate__animated animate__fadeIn" style={{ backgroundColor: 'rgba(15, 23, 42, 0.4)', zIndex: 99999, backdropFilter: 'blur(2px)' }}>
+          <div className="bg-white p-4 mx-3 rounded-4 shadow-xl border border-light-subtle animate__animated animate__zoomIn" style={{ maxWidth: '460px', width: '100%' }}>
+            <div className="text-danger mb-2"><i className="fa-solid fa-circle-ban fa-2xl"></i></div>
+            <h3 className="h5 fw-extrabold text-dark mb-1" style={{ fontWeight: '800' }}>Justificativa de Recusa</h3>
+            <p className="text-muted small mb-3" style={{ fontSize: '12px' }}>Para recusar a Ordem de Serviço #{selectedRequest?.id} diretamente, é obrigatório registrar o motivo institutional (Mínimo de 10 caracteres).</p>
+            
+            <textarea 
+              className="form-control font-monospace border border-light-subtle shadow-sm mb-3"
+              placeholder="Descreva o motivo da recusa..."
+              rows={4}
+              value={justificativaRecusa}
+              onChange={e => setJustificativaRecusa(e.target.value)}
+              style={{ fontSize: '12px' }}
+            />
+
+            <div className="d-flex gap-2 justify-content-end">
+              <button className="btn btn-sm btn-light border font-monospace text-uppercase" style={{ fontSize: '11px' }} onClick={() => setShowRecusaModal(false)}>Voltar</button>
+              <button className="btn btn-sm btn-danger font-monospace text-uppercase fw-bold text-white" style={{ fontSize: '11px' }} onClick={handleConfirmarRecusaDireta} disabled={justificativaRecusa.trim().length < 10}>Confirmar Recusa</button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
