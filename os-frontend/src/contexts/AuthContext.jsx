@@ -2,20 +2,8 @@ import React, { createContext, useState, useContext, useEffect, useCallback } fr
 
 const AuthContext = createContext({});
 
-/**
- * Hook customizado para consumo simplificado do contexto de autenticação.
- * @returns {Object} Contrato de estados e funções globais de sessão.
- */
 export const useAuth = () => useContext(AuthContext);
 
-/**
- * Provedor de Contexto de Autenticação e Estado Global da UI.
- * Centraliza o gerenciamento de tokens JWT e intercepta falhas físicas de rede (RNF02).
- *
- * @component
- * @param {Object} props Propriedades do componente.
- * @param {React.ReactNode} props.children Nós filhos que herdarão o contexto de dados.
- */
 export const AuthProvider = ({ children }) => {
     const [user, setUser] = useState(null);
     const [token, setToken] = useState(localStorage.getItem('os_token'));
@@ -25,6 +13,10 @@ export const AuthProvider = ({ children }) => {
     const [usuariosPendentes, setUsuariosPendentes] = useState([]);
     const [usersList, setUsersList] = useState([]);
     const [statsPainel, setStatsPainel] = useState({ total: 0, abertos: 0, atendimento: 0, resolvidos: 0 });
+    
+    // Estados dinâmicos de Governança alimentados pelo Banco de Dados
+    const [blocosInstanciados, setBlocosInstanciados] = useState([]);
+    const [categoriasInstanciadas, setCategoriasInstanciadas] = useState([]);
 
     const API_URL = import.meta.env?.VITE_API_URL || "http://127.0.0.1:8000";
 
@@ -35,20 +27,13 @@ export const AuthProvider = ({ children }) => {
         setPermissions({});
         setUsuariosPendentes([]);
         setUsersList([]);
+        setBlocosInstanciados([]);
+        setCategoriasInstanciadas([]);
     }, []);
 
-    /**
-     * Interceptador Centralizado de Requisições HTTP (RNF02 - CA 2.1).
-     * Aplica injeção automática de cabeçalhos Bearer e tratamento universal de falhas de rede.
-     *
-     * @async
-     * @param {string} endpoint Caminho relativo da rota (Ex: '/api/requests').
-     * @param {Object} [options={}] Configurações nativas do Fetch API.
-     * @returns {Promise<Object>} Resposta normalizada contendo a flag de sucesso e os dados/detalhes.
-     */
     const request = useCallback(async (endpoint, options = {}) => {
         const headers = {
-            'Content-Type': 'application/json',
+            ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
             ...(token && { 'Authorization': `Bearer ${token}` })
         };
 
@@ -69,103 +54,60 @@ export const AuthProvider = ({ children }) => {
             }
 
             if (!response.ok) {
-            
                 if (response.status === 401 && endpoint !== '/api/auth/login') {
                     logout();
                     return { success: false, message: "Sessão expirada. Por favor, realize um novo acesso." };
                 }
-                
-                const errorMessage = data.detail || data.message || `Erro operacional no servidor (Código: ${response.status}).`;
+                const errorMessage = data.detail || data.message || `Erro operacional (Código: ${response.status}).`;
                 return { success: false, message: errorMessage };
+            }
+
+            // Normaliza as respostas brutas de listas que não contêm o wrapper {success: true}
+            if (Array.isArray(data)) {
+                return data;
             }
 
             return { success: true, ...data };
         } catch (error) {
             return { 
                 success: false, 
-                message: "Não foi possível conectar ao servidor da UFAM. O serviço está temporariamente indisponível ou fora do ar." 
+                message: "Não foi possível conectar ao servidor da UFAM. O serviço está temporariamente indisponível." 
             };
         }
     }, [token, logout, API_URL]);
 
-    useEffect(() => {
-        let isMounted = true;
+    // 🚀 ETAPA 1 DO CADASTRO: Solicita o Token OTP travando o domínio no backend
+    const requestRegisterToken = async (emailPrefix) => {
+        const completoEmail = `${emailPrefix.trim().toLowerCase()}@ufam.edu.br`;
+        return await request('/api/auth/register/request-token', {
+            method: 'POST',
+            body: JSON.stringify({ email: completoEmail })
+        });
+    };
 
-        async function validateSession() {
-            if (token) {
-                try {
-                    // Decodificação local manual do JWT via manipulação de Buffer Base64
-                    const base64Url = token.split('.')[1];
-                    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-                    const payloadToken = JSON.parse(window.atob(base64));
-                    
-                    const rawSub = payloadToken?.sub || "";
-                    const normalizedUsername = rawSub.includes("@") ? rawSub.split("@")[0] : rawSub;
+    // 🚀 ETAPA 2 DO CADASTRO: Valida o Token inserido antes de abrir o formulário
+    const verifyRegisterToken = async (emailPrefix, codigo) => {
+        const completoEmail = `${emailPrefix.trim().toLowerCase()}@ufam.edu.br`;
+        return await request('/api/auth/register/verify-token', {
+            method: 'POST',
+            body: JSON.stringify({ email: completoEmail, codigo: codigo.trim() })
+        });
+    };
 
-                    const temAcessoAdmin = payloadToken?.role === 'admin' || normalizedUsername === 'admin' || normalizedUsername === 'gerente.gti';
-
-                    if (temAcessoAdmin) {
-                        const result = await request('/api/admin/bootstrap');
-                        
-                        if (isMounted && result && result.success && result.user) {
-                            const userData = {
-                                id: result.user.id,
-                                nome_completo: result.user.nome_completo || result.user.nome || "Administrador Geral",
-                                username: result.user.username,
-                                email: result.user.email,
-                                siape: result.user.siape || payloadToken?.siape || "99999",
-                                cargo: result.user.cargo || "Técnico da GTI",
-                                role: result.user.role || "admin"
-                            };
-                            
-                            setUser(userData);
-                            setPermissions(result.permissions || {});
-                            setUsuariosPendentes(result.usuarios_pendentes || []);
-                            setUsersList(result.users || []);
-                            
-                            if (result.estatisticas) {
-                                setStatsPainel({
-                                    total: (result.estatisticas.cadastros_pendentes || 0) + 
-                                           (result.estatisticas.chamados_abertos || 0) + 
-                                           (result.estatisticas.chamados_atendimento || 0) + 
-                                           (result.estatisticas.chamados_resolvidos || 0),
-                                    abertos: result.estatisticas.chamados_abertos || 0,
-                                    atendimento: result.estatisticas.chamados_atendimento || 0,
-                                    resolvidos: result.estatisticas.chamados_resolvidos || 0
-                                });
-                            }
-                        } else if (isMounted) {
-                            logout();
-                        }
-                    } else {
-                        const userEmail = payloadToken?.sub?.includes("@") ? payloadToken.sub : `${normalizedUsername}@ufam.edu.br`;
-                        
-                        const userData = {
-                            id: payloadToken?.id || 2,
-                            nome_completo: payloadToken?.nome_completo || "Servidor do Instituto",
-                            username: normalizedUsername,
-                            email: userEmail,
-                            siape: payloadToken?.siape || "N/I",
-                            cargo: payloadToken?.cargo || "Servidor",
-                            role: payloadToken?.role || "tecnico"
-                        };
-                        
-                        setUser(userData);
-                        setPermissions({ "os:criar": true, "os:ver_proprias": true });
-                    }
-                } catch (err) {
-                    if (isMounted) logout();
-                }
+    const registerUser = async (payload) => {
+        try {
+            const result = await request('/api/auth/register', {
+                method: 'POST',
+                body: JSON.stringify(payload)
+            });
+            if (result && result.success) {
+                return { success: true };
             }
-            if (isMounted) setLoading(false);
+            return { success: false, message: result?.message || "Inconsistência ao processar o cadastro." };
+        } catch (error) {
+            return { success: false, message: "Falha inesperada no processamento." };
         }
-
-        validateSession();
-
-        return () => {
-            isMounted = false;
-        };
-    }, [token, request, logout]);
+    };
 
     const login = async (credentials) => {
         try {
@@ -188,7 +130,7 @@ export const AuthProvider = ({ children }) => {
 
                 const sessionUser = {
                     id: result.user?.id,
-                    nome_completo: result.user?.nome_completo || result.user?.nome || "Servidor",
+                    nome_completo: result.user?.nome_completo || "Servidor",
                     username: normalizedUsername,
                     email: userEmail,
                     siape: result.user?.siape || decodedToken?.siape || "N/I",
@@ -200,73 +142,84 @@ export const AuthProvider = ({ children }) => {
                 setPermissions(result.permissions || {});
                 return { success: true, role: result.user?.role };
             }
-            
-            return { 
-                success: false, 
-                message: result?.message || "Resposta de autenticação corrompida pelo servidor." 
-            };
+            return { success: false, message: result?.message || "Resposta de autenticação corrompida." };
         } catch (error) {
-            return { 
-                success: false, 
-                message: "Falha inesperada no processamento do login." 
-            };
+            return { success: false, message: "Falha no processamento do login." };
         }
     };
 
-    const registerUser = async (payload) => {
-        try {
-            const result = await request('/api/auth/register', {
-                method: 'POST',
-                body: JSON.stringify(payload)
-            });
-                
-            if (result && result.success) {
-                const temporaryId = Date.now();
-                setUsuariosPendentes(prev => [...prev, { ...payload, id: temporaryId, is_active: false }]);
-                return { success: true };
-            }
-            
-            return { success: false, message: result?.message || "Inconsistência ao processar o cadastro." };
-        } catch (error) {
-            return { success: false, message: "Falha inesperada no processamento do cadastro." };
-        }
-    };
+    useEffect(() => {
+        let isMounted = true;
+        async function validateSession() {
+            if (token) {
+                try {
+                    const base64Url = token.split('.')[1];
+                    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+                    const payloadToken = JSON.parse(window.atob(base64));
+                    const rawSub = payloadToken?.sub || "";
+                    const normalizedUsername = rawSub.includes("@") ? rawSub.split("@")[0] : rawSub;
 
-    const recoverPassword = async (email) => {
-        try {
-            const result = await request('/api/auth/forgot-password', {
-                method: 'POST',
-                body: JSON.stringify({ email })
-            });
-            if (result && result.success) {
-                return { success: true };
+                    const temAcessoAdmin = payloadToken?.role === 'admin' || normalizedUsername === 'admin' || normalizedUsername === 'gerente.gti';
+
+                    if (temAcessoAdmin) {
+                        const result = await request('/api/admin/bootstrap');
+                        if (isMounted && result && result.success && result.user) {
+                            setUser({
+                                id: result.user.id,
+                                nome_completo: result.user.nome_completo || "Administrador Geral",
+                                username: result.user.username,
+                                email: result.user.email,
+                                siape: result.user.siape || "99999",
+                                cargo: result.user.cargo || "Técnico da GTI",
+                                role: result.user.role || "admin"
+                            });
+                            setPermissions(result.permissions || {});
+                            setUsuariosPendentes(result.usuarios_pendentes || []);
+                            setUsersList(result.users || []);
+                            
+                            // 🚀 CORREÇÃO CRÍTICA DO SINAL: Sincroniza com as chaves reais devolvidas do barramento do Postgres
+                            setBlocosInstanciados(result.blocos_infraestrutura || []);
+                            setCategoriasInstanciadas(result.categorias_catalogo || []);
+
+                            if (result.estatisticas) {
+                                setStatsPainel({
+                                    total: (result.estatisticas.chamados_abertos || 0) + (result.estatisticas.chamados_atendimento || 0) + (result.estatisticas.chamados_resolvidos || 0),
+                                    abertos: result.estatisticas.chamados_abertos || 0,
+                                    atendimento: result.estatisticas.chamados_atendimento || 0,
+                                    resolvidos: result.estatisticas.chamados_resolvidos || 0
+                                });
+                            }
+                        }
+                    } else {
+                        const userEmail = payloadToken?.sub?.includes("@") ? payloadToken.sub : `${normalizedUsername}@ufam.edu.br`;
+                        setUser({
+                            id: payloadToken?.id || 2,
+                            nome_completo: payloadToken?.nome_completo || "Servidor do Instituto",
+                            username: normalizedUsername,
+                            email: userEmail,
+                            siape: payloadToken?.siape || "N/I",
+                            cargo: payloadToken?.cargo || "Servidor",
+                            role: payloadToken?.role || "tecnico"
+                        });
+                        setPermissions({ "os:criar": true, "os:ver_proprias": true });
+                    }
+                } catch (err) {
+                    if (isMounted) logout();
+                }
             }
-            return { success: false, message: result?.message || "Erro ao solicitar código de recuperação." };
-        } catch (error) {
-            return { success: false, message: "Falha inesperada ao processar o token OTP." };
+            if (isMounted) setLoading(false);
         }
-    };
+        validateSession();
+        return () => { isMounted = false; };
+    }, [token, request, logout]);
 
     const value = {
-        user,
-        token,
-        permissions,
-        isAuthenticated: !!token,
-        loading,
-        login,
-        logout,
-        registerUser,
-        recoverPassword,
-        request,
-        usuarios_pendentes: usuariosPendentes,
-        users: usersList,
-        statsPainel,
+        user, token, permissions, isAuthenticated: !!token, loading, login, logout, registerUser,
+        requestRegisterToken, verifyRegisterToken, request,
+        usuarios_pendentes: usuariosPendentes, users: usersList, statsPainel,
+        blocos: blocosInstanciados, categorias: categoriasInstanciadas,
         isAdmin: user?.role === 'admin' || user?.username === 'gerente.gti'
     };
 
-    return (
-        <AuthContext.Provider value={value}>
-            {children}
-        </AuthContext.Provider>
-    );
+    return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };

@@ -5,7 +5,7 @@ from sqlalchemy.orm import declarative_base
 # 🚀 DEFESA DE AMBIENTE LOCAL: Captura o .env ou força o IP numérico do banco rodando no Docker
 DATABASE_URL = os.getenv(
     "DATABASE_URL", 
-    "postgresql+asyncpg://postgres:gti_icet_2026@127.0.0.1:5432/os_icet_db"
+    "postgresql+asyncpg://postgres:root_password_ufam_2026@127.0.0.1:5432/sistema_os_db"
 )
 
 # Nota de Engenharia: Certifique-se de alinhar os dados acima (usuario, senha e nome do banco)

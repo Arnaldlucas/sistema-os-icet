@@ -66,6 +66,11 @@ class Usuario(Base):
     aprovado_em = Column(DateTime(timezone=True), nullable=True)
     aprovado_por_id = Column(Integer, ForeignKey("usuarios.id"), nullable=True)
     
+    # Controle de Segurança e Verificação Prévia de E-mail (Fluxo Interativo de Token OTP)
+    # Permite salvar o código efêmero enviado e verificar sua data de validade antes da aprovação.
+    codigo_verificacao = Column(String(6), nullable=True)
+    codigo_expira_em = Column(DateTime(timezone=True), nullable=True)
+
     criado_em = Column(DateTime(timezone=True), server_default=func.now())
     atualizado_em = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
