@@ -2,14 +2,15 @@ FROM node:18-alpine
 
 WORKDIR /app
 
-COPY package*.json ./
-
-RUN npm install --include=dev
-
+# Copia tudo primeiro (inclusive a node_modules ruim, se vier do Git)
 COPY . .
 
-# Sincronizado estritamente com o barramento do vite.config.js local
+# Comando Sênior: Destrói qualquer node_modules ou dist do Windows que o COPY trouxe
+RUN rm -rf node_modules dist
+
+# Agora sim, instala tudo do zero e limpo para o Linux Alpine
+RUN npm install --include=dev
+
 EXPOSE 5600
 
-# Força o Vite a escutar conexões externas na porta 5600 casada com o compose
 CMD ["npm", "run", "dev", "--", "--port", "5600", "--host"]
